@@ -9,6 +9,7 @@ Many Kubernetes workload clusters are provisioned with a random Certificate Auth
 
 This is described in detail in the [Kubernetes Documentation](https://kubernetes.io/docs/setup/best-practices/certificates/).
 
+Thanks to [**Dodd Pfeffer**](https://www.linkedin.com/in/doddpfeffer/) for helping me use Contour!
 
 ## TL;DR
 
