@@ -3,25 +3,39 @@ title: "Kubeapi with Contour"
 date: 2023-04-24
 ---
 
-
 # Securely expose Kubeapi with Contour HTTPProxy
 
 Many Kubernetes workload clusters are provisioned with a random Certificate Authority. This allows the Cluster to create the dependent certificates and keys, providing security among the various services.
 
 This is described in detail in the [Kubernetes Documentation](https://kubernetes.io/docs/setup/best-practices/certificates/).
 
+
+## TL;DR
+
+The details of the solution are provided in a Git repo, including a detailed readme and sample code.
+
+[Check out the repo here](https://github.com/cgsamp/k8s-custom-api-cert)
+
 ## Validate Certificate Authority
 
-### Certificate Authority in kubeconfig
+TLS relies on the server providing a Certificate. This Certificate references a Certificate Authority - essentially, the "notary" that "vouches" that the certificate was provided correctly and the service providing the certificate is who they say they are.
 
-Most of the time, this random Certificate Authority is distributed into the client `kubeconfig` file. 
+How do you know to trust the Certificate Authority?
+
+The client system (your laptop, for example) has a list of CAs it will trust. Some are so-called "root CAs" that are shipped with your computer or its software. Others are individually added. For instance, a company may have their own CA that they place on their employee's systems.
+
+It can also be specifically referenced, or manually added to a truststore.
+
+## Certificate Authority in kubeconfig
+
+Most of the time, the Kubernetes-generated  random Certificate Authority is distributed into the client `kubeconfig` file. (Validation can also be skipped with the `insecure-skip-tls-verify` option, defeating the system entirely.)
 
 ```
 apiVersion: v1
 clusters:
 - cluster:
     certificate-authority-data: LS0t...Self-Signed (Base64-encoded generated certificate authority)
-    server: https://kubeapi-server:6443
+    server: https://kubeapi-server:
   name: my-cluster
 contexts:
 - context:
@@ -62,22 +76,26 @@ SUCCESS!!!
 
 ![Sequence diagram](/assets/mermaid-diagram-2023-04-24-141910.png)
 
-### Certificate not provided
+## Certificate not provided
 
-This requires additional trust on part of the client, and a chain of custody over the self-signed certificate. If a malicious actor is able to substitute their own self-signed certificate, they could create a person-in-the-middle attack and monitor all communications, including stealing secrets and data!
+Putting the certificate into the kubeconfig file is convenient, but it requires trusting that process. If a malicious actor is able to substitute their own self-signed certificate, they could create a person-in-the-middle attack and monitor all communications, including stealing secrets and data!
 
 The Public Key Infrastructure (PKI) system is designed to prevent this. There is a trusted set of Root Certificate Authorities that can be trusted to issue certificates or intermediate certificate authorities. The CA that is provided as part of the Certificate could be validated against these trusted CAs.
 
-That interaction would happen as follows:
+That interaction shows what happens when the CA is not provided, and the self-signed certificate is used. Trust is not established.
 ![Sequence diagram](/assets/mermaid-diagram-2023-04-24-143121.png)
 
-### Modify Kubernetes certificates
+## Solutions
 
-It is possible, as shown in the documentation, to provide the Kubernetes bootstrap service with a Certificate Authority to create all it's internal certificates. However, in practice, CAs are not often distributed as they could represent a security risk if lost, stolen or abused.
+### Provide Kubernetes an intermediate CA
 
-It is also possible to `ssh` into the control plane nodes and swap out certificates. I don't want to do that, do you??
+It is possible to provide the Kubernetes bootstrap service with a Certificate Authority to create all it's internal certificates. However, in practice, CAs are not often distributed as they could represent a security risk if lost, stolen or abused. There are many nuances to consider, like for what purposes the CA could be used. [Kubernetes docs discuss in detail.](https://kubernetes.io/docs/tasks/tls/manual-rotation-of-ca-certificates/#rotate-the-ca-certificates-manually)
 
-## Solution: Ingress!
+### Manually change certificates
+
+[It is also possible to `ssh` into the control plane nodes and swap out certificates.](https://kubernetes.io/docs/setup/best-practices/certificates/#configure-certificates-manually) I don't want to do that, do you??
+
+## Solution: Ingress
 
 Kubernetes has in Ingress class that can be fulfilled by a number of providers, like NGINX or Contour - Contour is our choice today.
 
@@ -85,101 +103,6 @@ We can create or obtain our own Certificate, and have Contour present that to th
 
 ![sequence diagram](/assets/mermaid-diagram-2023-04-24-144439.png)
 
+## Solution: Load balancer
 
-# Deploying
-
-## Install Contour
-
-To quickly install OSS Contour, access the kubernetes cluster with a user having sufficent rights.
-
-```
-kubectl apply -f https://projectcontour.io/quickstart/contour.yaml
-```
-
-* In a newly installed TKGs cluster, this role mapping may be needed:
-```
-kubectl create rolebinding rolebinding-default-privileged-sa-ns_default --namespace=projectcontour --clusterrole=psp:vmware-system-privileged --group=system:serviceaccounts
-
-```
-
-## Get Contour / Envoy IP address
-
-```
-kubectl get service/envoy -n projectcontour -o json | jq -r '.status.loadBalancer.ingress[0].ip'
-```
-
-## Create the Secret
-
-```
-apiVersion: v1
-kind: Secret
-metadata:
-  name: csamp-tanzu-wildcard
-data:
-  tls.crt: [base64-encoded certificate]
-  tls.key: [base64-encoded private key] 
-type: kubernetes.io/tls
-
-```
-
-## Create the Ingress
-
-Actually, we are using Contour's HTTPProxy, as it allows upstream TLS.
-
-```
-kind: HTTPProxy
-apiVersion: projectcontour.io/v1
-metadata:
-  name: kubeapi-proxy
-  namespace: default
-spec:
-  virtualhost:
-    fqdn: k8s.csamp-tanzu.com
-    tls:
-      secretName: csamp-tanzu-wildcard
-  routes:
-    - services:
-        - name: kubernetes
-          port: 443
-          protocol: tls
-```
-
-## Create the DNS entry
-
-Use the DNS provider to map the address for which you have a certificate to the envoy IP address.
-
-## Create a new kubeconfig file
-
-```
-apiVersion: v1
-clusters:
-- cluster:
-    server: https://k8s.csamp-tanzu.com
-  name: remote-tkgs-workload-cluster-1
-contexts:
-- context:
-    cluster: remote-tkgs-workload-cluster-1
-    user: third-party
-  name: remote-tkgs-workload-cluster-1
-current-context: remote-tkgs-workload-cluster-1
-kind: Config
-preferences: {}
-users:
-- name: third-party
-  user:
-    token: [User-token]
-
-```
-
-## Connect to the Kubernetes api!
-
-```
-✗ kubectl --kubeconfig csamp-tanzu-kubeconfig.yaml get nodes    
-NAME                                                              STATUS   ROLES                  AGE     VERSION
-tkgs-workload-cluster-1-control-plane-fdcnt                       Ready    control-plane,master   4h32m   v1.23.8+vmware.3
-tkgs-workload-cluster-1-control-plane-s6nhj                       Ready    control-plane,master   4h37m   v1.23.8+vmware.3
-tkgs-workload-cluster-1-control-plane-zjsjx                       Ready    control-plane,master   4h35m   v1.23.8+vmware.3
-tkgs-workload-cluster-1-worker-nodepool-a1-wdvbn-65bb4c9796wtvj   Ready    <none>                 4h35m   v1.23.8+vmware.3
-tkgs-workload-cluster-1-worker-nodepool-a1-wdvbn-65bb4c979frzb8   Ready    <none>                 4h35m   v1.23.8+vmware.3
-tkgs-workload-cluster-1-worker-nodepool-a1-wdvbn-65bb4c979w6wjw   Ready    <none>                 4h35m   v1.23.8+vmware.3
-```
+It is also possible to use a load balancer to perform TLS Termination and Workload Encryption. The elegance of using Ingress is that information about the Node IPs does not need to be exposed outside the cluster, making the system more maintainable.
