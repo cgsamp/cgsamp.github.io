@@ -2,4 +2,4 @@
 title: Welcome to my blog
 ---
 
-This is my blog. There are many like it, but this one is mine.
+I am a dad, engineer and cloud-native developer employed with VMware as a Staff SE and CTO Advisor.
