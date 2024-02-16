@@ -1,6 +1,6 @@
 ---
-title: "Connect to Kubeapi by Third Party with verified TLS"
-date: 2023-04-18
+title: "Homelab resurrected!"
+date: 2024-02-16
 ---
 
 
