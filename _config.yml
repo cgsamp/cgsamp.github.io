@@ -1,3 +1,5 @@
 theme: minima
 title: Samp Software
 author: Christopher G Samp (Chris)
+include:
+  - CNAME
